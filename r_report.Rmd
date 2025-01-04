@@ -1,0 +1,611 @@
+---
+title: "app_store_data_analysis"
+output:
+  pdf_document: default
+  word_document: default
+date: "2023-10-20"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# 1. library import
+```{r}
+library(ggcorrplot)
+library(leaps) 
+library(gridExtra) 
+library(lattice) 
+library(reshape2) 
+library(GGally) 
+library(ggpubr) 
+library(tidyverse) 
+library(stargazer) 
+library(ggridges)
+library(coefplot)
+library(reshape2)
+library(ggpubr)
+library(ggdist)
+library(lme4)
+library(sjPlot)
+library(psych)
+library(dagitty)
+library(ggdag)
+library(readr)
+library(funModeling)
+library(ggplot2)
+```
+
+# 2. Clean environment
+```{r pressure, echo=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE) 
+rm(list=ls()) 
+set.seed(41) 
+options(scipen=10000) 
+```
+
+# 3. Template Creation ------------------------------------------------------------------------------------
+## Creation of a default template for plots
+```{r}
+theme_plots <- theme(
+  legend.key = element_rect(color = NA),
+  panel.grid = element_blank(),
+  panel.background = element_blank(),
+  panel.border = element_blank(),
+  axis.text = element_text(size = 12),
+  axis.ticks = element_blank(),
+  title = element_text(face = "bold", size = 16),
+  plot.title = element_text(hjust = 0.5),
+  panel.grid.major.x = element_line(color = NA),
+  panel.grid.major.y = element_line(color = NA),
+  text = element_text(family = "palatino"),
+  panel.grid.minor.x = element_line(color = NA),
+  panel.grid.minor.y = element_line(color = NA),
+  axis.line = element_line(color = "grey"),
+)
+```
+
+# 4. Data Import and Cleaning -----------------------------------------------------------------
+## Read csv data (specify path of apple_data.csv)
+```{r}
+apple_data <- read_delim("apple_data.csv", 
+                         delim = ";", escape_double = FALSE, 
+                         col_types = cols(...1 = col_number(), 
+                                         id = col_integer(), size_bytes = col_number(), 
+                                         price = col_number(), rating_count_tot = col_integer(), 
+                                         rating_count_ver = col_integer(), 
+                                         user_rating = col_number(), user_rating_ver = col_number(), 
+                                         cont_rating = col_factor(c("4", "9", "12", "17"), ordered = T), 
+                                         prime_genre = col_character(), 
+                                         sup_devices.num = col_integer(), ipadSc_urls.num = col_integer(), 
+                                         lang.num = col_integer(), vpp_lic = col_logical()), 
+                         trim_ws = TRUE)
+```
+
+## First glance into the dataset
+```{r}
+View(apple_data)
+str(apple_data) 
+summary(apple_data)
+glimpse(apple_data) 
+head(apple_data)
+```
+## Check for NA values by applying the mean function to all numeric columns
+```{r}
+mean(apple_data$id)
+mean(apple_data$size_bytes)
+mean(apple_data$price)
+mean(apple_data$rating_count_tot)
+mean(apple_data$rating_count_ver)
+mean(apple_data$user_rating)
+mean(apple_data$user_rating_ver)
+mean(apple_data$sup_devices.num)
+mean(apple_data$ipadSc_urls.num)
+mean(apple_data$lang.num)
+
+```
+
+## Clean data
+```{r}
+# delete observations with NA in price 
+apple_data_v1 <- apple_data %>%
+  filter (!is.na(price)) 
+View(apple_data_v1)
+
+# set observations with 0 languages supported to 1
+apple_data_v1$lang.num <- replace(apple_data_v1$lang.num, apple_data_v1$lang.num==0, 1)
+View(apple_data_v1)
+
+# check for duplicates
+  length(unique(apple_data_v1$id)) == nrow(apple_data_v1)
+# zero duplicates found 
+ 
+# check for app currencies for potential clustering -> all app's currency is USD 
+USD_only <- apple_data %>% 
+  filter(currency == "USD") 
+
+# filter out data that has less than five ratings 
+apple_data_v1 <- apple_data_v1 %>% 
+filter(rating_count_tot >= 5)
+View(apple_data_v1)
+```
+
+# 5. Data Transformation --------------------------------------------------------------------
+
+## Check how many apps are in each prime_genre
+```{r}
+apps_category <- apple_data_v1 %>%
+  group_by(prime_genre) %>%
+  summarise(num_app_in_category = n()) %>%
+  arrange(desc(num_app_in_category))
+apps_category
+apps_category %>% 
+  ggplot() +
+  aes(x=reorder(prime_genre, -num_app_in_category), y=num_app_in_category) +
+  geom_col() +
+  theme_plots +
+  labs(x="Prime Genre",y="No. of  Apps",title="No. of  Apps per Prime Genre") +
+  theme(axis.text.x = element_text(angle = 65, hjust = 1))
+
+```
+## Creation of new dataset for analysis by clustering prime_genre and addition of 3 columns
+```{r}
+apple_data_v2 <- apple_data_v1 %>%
+# clustering prime_genre's into 10 distinct categories
+  arrange(prime_genre) %>%
+  mutate(new_category = ifelse(prime_genre=="Social Networking", "Communication", 
+                        ifelse(prime_genre=="Games", "Entertainment",
+                        ifelse(prime_genre=="Music", "Entertainment", 
+                        ifelse(prime_genre=="Entertainment", "Entertainment", 
+                        ifelse(prime_genre=="Photo & Video", "Entertainment", 
+                        ifelse(prime_genre=="Productivity", "Productivity", 
+                        ifelse(prime_genre=="Business", "Productivity",
+                        ifelse(prime_genre=="Finance", "Productivity",
+                        ifelse(prime_genre=="Weather", "Utilities", 
+                        ifelse(prime_genre=="Utilities", "Utilities",
+                        ifelse(prime_genre=="Shopping", "Commerce", 
+                        ifelse(prime_genre=="Catalogs", "Commerce", 
+                        ifelse(prime_genre=="Education", "Educational", 
+                        ifelse(prime_genre=="Reference", "Educational", 
+                        ifelse(prime_genre=="Travel","Mobility", 
+                        ifelse(prime_genre=="Navigation","Mobility", 
+                        ifelse(prime_genre=="Health & Fitness", "Health", 
+                        ifelse(prime_genre=="Medical", "Health", 
+                        ifelse(prime_genre=="Sports", "Lifestyle", 
+                        ifelse(prime_genre=="Lifestyle", "Lifestyle", 
+                        ifelse(prime_genre=="Food & Drink", "Lifestyle", 
+                        ifelse(prime_genre=="News", "Information", 
+                        ifelse(prime_genre=="Book", "Information", "")))))))))))))))))))))))) %>%
+# creation of three additional columns: app size in MBs, distinction of monetization (free or pay) and rating development (latest version vs. total)
+  mutate(size_mb = size_bytes/(1024^2), 
+         monetization = ifelse(price>0, "pay", "free"),
+         rating_dev = ifelse(user_rating_ver - user_rating > 0, "increased", 
+                             ifelse(user_rating_ver - user_rating == 0, "constant", "decreased"))) 
+View(apple_data_v2)
+
+# overall adjustments taken in data cleaning and transformation for final data set "apple_data_v2": 
+# deleting of all NA, 
+# filtering out apps with less than 5 ratings in total,
+# clustering genres into new_category,
+# calculation of app size as MB,
+# classification of pay or free apps, 
+# rating development after update to latest version
+```
+
+# 6. Data Analysis ----------------------------------------------------------------------------------
+
+## 6.1. Initial Data Assessment ---------------------------------------------------------------------
+
+### We summarise the overall data set and take a look into the categories
+```{r}
+summary(apple_data_v2)
+
+apple_data_v2 %>% 
+  group_by(new_category) %>% 
+  summarise(total_rating_count = sum(rating_count_tot), total_apps=n(),
+            avg_price = mean(price), avg_rating = mean(user_rating), 
+            avg_lang_sup = mean(lang.num),avg_screenshots=mean(ipadSc_urls.num), 
+            avg_devices=mean(sup_devices.num))
+```
+
+## 6.2. Distributions  -------------------------------------------------------------------------------
+
+### Distribution of all numerical variables 
+```{r}
+overview_distribution <- apple_data_v2 %>%
+  select(-...1, -id, -size_bytes)
+plot_num(overview_distribution,bins = 50) +
+  theme_plots +
+  labs(x="Value", y="Count", title = "Distribution Overview of All Variables")
+
+```
+### Additional data cleaning by filtering dataset to drop extreme outliers to create final dataset (apple_data_v3)
+```{r}
+price_threshold <-quantile(apple_data_v2$price,0.99)
+rating_count_tot_threshold <-quantile(apple_data_v2$rating_count_tot,0.99) 
+rating_count_ver_threshold <-quantile(apple_data_v2$rating_count_ver,0.99) 
+lang_num_threshold <-quantile(apple_data_v2$lang.num,0.99) 
+size_mb_threshold <-quantile(apple_data_v2$size_mb,0.99) 
+
+apple_data_v3 <- apple_data_v2 [apple_data_v2$price <= price_threshold & 
+                                apple_data_v2$rating_count_tot <= rating_count_tot_threshold &
+                                apple_data_v2$rating_count_ver <= rating_count_ver_threshold & 
+                                apple_data_v2$lang.num <= lang_num_threshold & 
+                                apple_data_v2$size_mb <= size_mb_threshold, ]
+
+overview_distribution <- apple_data_v3 %>%
+  select(-...1, -id, -size_bytes)
+plot_num(overview_distribution, bins = 50) +
+  theme_plots +
+  labs(x="Value", y="Count", title = "Updated Distribution Overview of All Variables")
+
+```
+
+### mean, max, standard deviation of final cleaned dataset
+```{r}
+# To get information such as mean, max, min in each variable
+summary(apple_data_v3 %>%
+          select(-...1, -id, -track_name, -currency, -vpp_lic, -ver, -prime_genre, 
+                 -new_category, -cont_rating, -monetization, -rating_dev))
+
+# Standard deviations for price, user rating, total rating count, language, screenshots und devices?
+sd(apple_data_v3$price)
+sd(apple_data_v3$rating_count_tot)
+sd(apple_data_v3$user_rating)
+sd(apple_data_v3$sup_devices.num)
+sd(apple_data_v3$ipadSc_urls.num)
+sd(apple_data_v3$lang.num)
+```
+
+### Apps per category in pie chart
+```{r}
+pie_chart <- apple_data_v3 %>%
+  group_by(new_category) %>%
+  summarise(num_apps = n())
+pie_chart <- pie_chart %>%
+  arrange(desc(new_category)) %>%
+  mutate(prop = round(num_apps / sum(pie_chart$num_apps) *100, 1)) %>%
+  mutate(ypos = cumsum(prop)- 0.5*prop )
+pie_chart %>% 
+  ggplot() +
+  aes(x="", y=prop, fill=new_category) +
+  geom_bar(stat="identity", width=1, color="white") +
+  coord_polar("y", start=0) +
+  theme_void()+
+  geom_text(aes(x=1.6, y = ypos, label = prop), color = "black", size=4, 
+            family="palatino") + 
+  guides(fill=guide_legend(title="Category")) +
+  labs(title = "Distribution of No. of Apps")+
+  theme_plots +
+  theme(axis.text = element_blank(),
+        axis.line = element_blank())
+```
+
+### Find highest average of rating score by new category
+```{r}
+apple_data_v3 %>%
+  group_by(new_category) %>%
+  summarise(avg_rating = mean(user_rating), sd_rating = sd(user_rating), 
+            avg_screenshot = mean(ipadSc_urls.num), num_apps = n(), num_rating_count = sum(rating_count_tot)) %>%
+  arrange(desc(avg_rating))
+```
+### Create a plot for the share of monetization over all apps
+```{r}
+num_of_monetization <- apple_data_v3 %>%
+  group_by(monetization) %>%
+  summarise(share_apps = n())
+share_of_monetization <- round(num_of_monetization$share_apps/nrow(apple_data_v3), 2)
+
+num_of_monetization %>%
+  mutate(ypos=0.8*share_of_monetization) %>%
+  ggplot() +
+  aes(x=monetization, y=share_of_monetization, fill=monetization) +
+  geom_col() +
+  labs(x="Monetization", y="Share of Apps", title = "The Share of Apps by Monetization") +
+  theme(legend.position = "none") +
+  geom_text(aes(y=ypos, label=share_of_monetization, size=14, family="palatino")) +
+  theme_plots 
+```
+
+### Create a plot for the share of monetization situation per category by first calculating the number of free/paid apps per category 
+```{r}
+free_or_pay <- apple_data_v3 %>%
+  group_by(new_category, monetization) %>%
+  summarise(num_apps_in_category = n())
+
+free_or_pay %>%
+  ggplot() +
+  aes(x=reorder(new_category, -num_apps_in_category), y=num_apps_in_category, fill=monetization) +
+  geom_col(position = "fill") +
+  labs(x="App Category", y="Level of Monetization", title = "The Share of Monetization per Category") +
+  theme_plots +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+### Price frequency distribution in scatter plot with all data points 
+```{r}
+price_distribution <- apple_data_v3 %>%
+  group_by(price) %>%
+  summarise(price_count = n())
+price_distribution %>%
+  ggplot() +
+  aes(x=price, y=price_count) +
+  geom_point()+
+  geom_smooth(method = lm) +
+  labs  (x = "Price", y = "Frequency of Price", title = "Frequency of Prices") +
+  theme_plots
+```
+
+### Relation of price and rating 
+```{r}
+price_and_rating <- apple_data_v3 %>%
+  group_by(price) %>%
+  summarise(avg_rating = mean(user_rating), new_category, count_price = n())
+
+price_and_rating %>%
+  ggplot() +
+  aes(x=price, y=avg_rating, size=count_price) +
+  geom_point() +
+  xlim(0,15) + 
+  theme_plots +
+  labs (x= "Price", y = "Average Rating", title = "Price per Average Rating") +
+  guides(size = guide_legend(title = "Frequency of Prices")) +
+  scale_size(range = c(5,25)) 
+
+```
+
+### Distribution of user_rating in general and per category
+```{r}
+# in general
+apple_data_v3 %>%
+  ggplot() +
+  aes(x=user_rating) +
+  geom_histogram(bins=25) +
+  theme_plots +
+  labs (x="User Rating", y = "No. of  Ratings", title = "Distribution of User Ratings") 
+
+# per category
+apple_data_v3 %>%
+  ggplot() +
+  aes(x=user_rating) +
+  geom_histogram(bins = 25 ) +
+  facet_wrap("new_category") +
+  scale_y_log10() +
+  theme_plots +
+  labs (x = "User Rating", y = "Count", title = "Distribution of User Ratings by Category")
+
+# Warning occurs but can be ignored because
+# applying scale_y_log_10 takes the logarithm of the count on the y axis. For instance, commerce and health do not have any apps with rating of 1 or 1.5, and therefore, the graph cannot plot those values because taking the logarithm of 0 is undefined
+```
+
+### Distribution of average user_rating per category
+```{r}
+avg_rating <- mean(apple_data_v3$user_rating)
+avg_rating
+mean(apple_data_v3$user_rating)
+apple_data_v3 %>%
+  group_by(new_category) %>%
+  summarise(avg_rating = mean(user_rating), num_app = n()) %>%
+  # use rating > 4 to see which category has good rating
+  mutate(avg_rating_tot = mean(avg_rating), good_category = ifelse(avg_rating > 4, as.character(new_category), NA_character_)) %>%
+  ggplot() +
+  aes(x=reorder(new_category, avg_rating), y=avg_rating, size=num_app, color=good_category) +
+  geom_point() +
+  theme_plots +
+  labs (x = "Category", y = "Average Rating", title = "The Average Rating by Category") +
+  geom_abline(intercept = avg_rating, slope = 0, lty=2, lwd=1, col = "blue", alpha=0.5) +
+  guides(size = guide_legend(title = "No. of  Apps"), color="none") +
+  scale_size(range = c(5,15)) +
+  geom_text(aes(y=avg_rating+0.1, label=round(avg_rating, 1), size = 3, 
+                family="palatino")) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+### Distribution of overall user_rating by monetization
+```{r}
+apple_data_v3 %>%
+  ggplot() +
+  aes(x=user_rating, fill=monetization) +
+  geom_histogram(position="dodge", bins=20) + 
+  theme_plots +
+  labs (x = "User Rating", y = "No. of  Ratings", title = "User Ratings for Paid and Free Apps") 
+```
+
+### Screenshot distribution in ratio
+```{r}
+amount_screenshots <- apple_data_v3 %>%
+  group_by(ipadSc_urls.num) %>%
+  summarise(ratio = n())
+sum_screenshots <- sum(amount_screenshots$ratio)
+ratio_screenshots <- apple_data_v3 %>%
+  group_by(ipadSc_urls.num) %>%
+  summarise(ratio = n()/sum_screenshots)
+ratio_screenshots %>%
+  ggplot() +
+  aes(x=factor(ipadSc_urls.num), y=ratio) +
+  geom_col() +
+  theme_plots + 
+  labs (x = "No. of  Screenshots", y = "Relative Share", title = "Frequency of Screenshots (relative)")
+```
+
+# 7. Statistic Analysis ----------------------------------------------------------------------------
+
+## 7.1. Correlation -------------------------------------------------------------------------------
+
+### Correlation between all variables
+```{r}
+new_names <- apple_data_v3 %>%
+  select(price, rating_count_tot, rating_count_ver, user_rating, user_rating_ver, sup_devices.num, ipadSc_urls.num, lang.num, 
+         size_mb) 
+
+axis_labels <- data.frame(
+  variable = colnames(new_names),
+  labely = c("No. of Ratings (total)","No. of Ratings (current version)","User Rating (total)","User Rating (current version)","No. of Supported Devices","No. of Displayed Screenshots in AppStore", "No. of Supported Languages", "Size in MB", "Price"),
+  #"Size in MB","No. of Supported Languages","No. of Displayed Screenshots in AppStore",
+  #"No. of Supported Devices","User Rating (current version)","User Rating (total)", 
+  #"No. of Ratings (current version)", "No. of Ratings (total)", "Price"),
+  labelx = c("Price", "No. of Ratings (total)", "No. of Ratings (current version)", "User Rating (total)", "User Rating (current version)", "No. of Supported Devices", "No. of Displayed Screenshots in AppStore", "No. of Supported Languages", "Size in MB")
+)
+# p value matrix
+p.mat <- round(cor_pmat(new_names), 2)
+p.mat
+corr <- round(cor(new_names), 1)
+ggcorrplot(corr, p.mat = p.mat, colors = c("#6d9ec1", "white", "#e46726"), legend.title = "Correlation", title = "Correlation between the variables", type = "upper") +
+  theme(panel.grid = element_blank()
+  ) +
+  labs(title = "Correlation of Different Variables", subtitle = "X = not significant", x = "Variable X", y = "Variable Y") + 
+  theme (plot.title = element_text (size = 18, face = "bold", hjust = 0.5)) +
+  theme_plots +
+  scale_x_discrete(labels = axis_labels$labelx) +
+  scale_y_discrete(labels = axis_labels$labely)
+```
+
+## 7.2. Linear models -------------------------------------------------------------------------------
+```{r}
+# proxy for the frequency of updates according to how much percent of the total rating are from the current version
+updates_and_satisfaction <- apple_data_v3 %>% 
+  mutate(versionfrequ = round((rating_count_ver/rating_count_tot)*100,2))
+
+# linear model to see impact of various variables on the user_rating and see the significance
+over_lm <- lm(apple_data_v3$user_rating ~ apple_data_v3$price + apple_data_v3$rating_count_tot +
+                apple_data_v3$sup_devices.num + apple_data_v3$ipadSc_urls.num + apple_data_v3$lang.num +
+                apple_data_v3$monetization + updates_and_satisfaction$versionfrequ) 
+summary(over_lm)
+```
+
+## 7.3. T-test -------------------------------------------------------------------------------
+```{r}
+# t test for 0 vs 5 screenshots on customer satisfaction
+# filter for 0 Screenshots & 5 Screenshots 
+zeroscreenshots <- apple_data_v3 %>%
+  filter (ipadSc_urls.num == 0)
+fivescreenshots <- apple_data_v3 %>%
+  filter (ipadSc_urls.num == 5)
+
+# preparations for t-test
+# check variances to answer if variances are equal
+var_0screen <- var(zeroscreenshots$user_rating)
+print(var_0screen)
+var_5screen <- var(fivescreenshots$user_rating)
+print(var_5screen)
+# check lengths to undertake t-test 
+length_0screen <- length(zeroscreenshots$user_rating)
+length_5screen <- length(fivescreenshots$user_rating)
+print(length_0screen)
+print(length_5screen)
+# change length of zeroscreenshots$user_rating 
+repeated_zeroscreenshots <- rep(zeroscreenshots$user_rating, length(fivescreenshots$user_rating))
+new_zeroscreenshots <- head(repeated_zeroscreenshots, n = 4145)
+print(new_zeroscreenshots)
+# recheck length
+length(fivescreenshots$user_rating)
+length(new_zeroscreenshots)
+# do t-test although it is not precisely normal distributed  
+t_test_result <- t.test(new_zeroscreenshots, fivescreenshots$user_rating, var.equal = F, alternative = "two.sided")
+print (t_test_result)
+```
+
+# 8. Impact of different variables on user_rating ------------------------------------------------------------------
+
+## Relationship of ipadSc_urls.num and user_rating
+```{r}
+apple_data_v3 %>%
+  filter(new_category == "Entertainment") %>%
+  ggplot() +
+  aes(x=ipadSc_urls.num, y=user_rating) +
+  geom_point(position = "jitter") +
+  geom_smooth(method = lm) + 
+  ylim(0, 5) +
+  theme_plots + 
+  labs (x = "No. of  Screenshots", y = "User Rating", title = "Relation of No. of  Screenshots and User Rating")
+```
+
+## Plot for the relationship between price and rating 
+```{r}
+apple_data_v3 %>%
+  ggplot() +
+  aes(x=price, y=user_rating) +
+  geom_point() +
+  facet_wrap("new_category") +
+  geom_smooth(method = lm) + 
+  ylim(0, 5) +
+  #xlim(-1, 100) +
+  scale_x_log10() + 
+  theme_plots + 
+  labs (x = "Price", y = "User Rating", title = "Relation of Price and User Rating")
+
+# warning occurs because
+# we use scale_x_log10 and it ignores the free apps, but can be ignored because we want to see only the relation of pay version apps and rating
+```
+
+## Compare average of paid vs. free apps 
+```{r}
+apple_data_v3 %>%
+  group_by(monetization) %>%
+  summarise(avg_rating = mean(user_rating))
+```
+
+## Deep dive into categories 
+```{r}
+apple_data_v3 %>%
+  ggplot() +
+  aes(x=rating_count_tot, y=user_rating) +
+  geom_point() +
+  facet_wrap("new_category") +
+  geom_smooth(method = lm) + 
+  ylim(0, 5) +
+  # xlim(-1, 400) +
+  scale_x_log10() + 
+  theme_plots + 
+  labs (x = "Total Rating Count", y = "User Rating", title = "Relation of Total Rating Count and User Rating") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 0.8))
+```
+
+## Relationship of sup_devices.num and user_rating
+```{r}
+apple_data_v3 %>%
+  ggplot() +
+  aes(x=sup_devices.num, y=user_rating) +
+  geom_point() +
+  facet_wrap("new_category") +
+  geom_smooth(method = lm) + 
+  ylim(0, 5) +
+  # xlim(-1, 400) +
+  theme_plots +
+  labs (x = "No. of  Supported Devices", y = "User Rating", title = "Relation of No. of  Supported Devices and User Rating")
+```
+
+## Differences of user satisfaction between categories 
+```{r}
+apple_data_v3 %>%
+  ggplot() +
+  aes(x = new_category, y = user_rating) +
+  geom_boxplot() +
+  stat_summary(fun = mean, geom = "point", shape = 19, size = 3, color = "red") +
+  theme_plots + 
+  labs (x = "Category", y = "User Rating", title = "Distribution of Rating by Category") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+## The comparison between rating counts and rating development in monetization and categories
+```{r}
+rel_rating_and_count <- apple_data_v3 %>%
+  group_by(new_category, monetization) %>%
+  summarise(total_count = sum(rating_count_ver), avg_count = sum(rating_count_ver)/n(), num_app = n(),
+            perc_diff_rating = mean((user_rating_ver - user_rating)/user_rating)*100)
+avg_y <- mean(rel_rating_and_count$perc_diff_rating)
+avg_x <- mean(rel_rating_and_count$avg_count)
+rel_rating_and_count %>% ggplot() +
+  aes(x=avg_count, y=perc_diff_rating, color=new_category, shape=monetization, size=5) +
+  geom_point()+
+  scale_x_log10()+
+  ylim(-30, 15) +
+  geom_abline(intercept = avg_y, slope = 0, lty=2, lwd=1, col = "blue", alpha=0.5) +
+  geom_vline(xintercept = avg_x, lty=2, lwd=1, col = "red", alpha=0.5)+
+  labs(x="averaged count of rating in current version", y="% change of rating in new version", 
+       title = "Relation of No. of Rating\nand Rating Development")+
+  theme_plots +
+  guides(size="none", shape=guide_legend(title="Monetizartion"), color=guide_legend(title="Category"))
+```
+
+
