@@ -1,4 +1,5 @@
 # Project-Appstore-Analysis
+## uni project
 ## Purpose
 This project analyzes App Store data to uncover insights about how app characteristics, user ratings, pricing, and monetization strategies are related to App's satisfaction rate.
 
